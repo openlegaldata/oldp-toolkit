@@ -285,9 +285,10 @@ class ConvertDumpToHFCommand(BaseCommand):
             # Load or stream data from JSONL file
             if args.streaming:
                 # Use streaming approach - create dataset from generator
-                data_generator = self._stream_jsonl_data(args.input_file, args.skip, args.limit)
                 logger.info("Creating HuggingFace dataset from stream")
-                dataset = Dataset.from_generator(lambda: data_generator)
+                dataset = Dataset.from_generator(
+                    lambda: self._stream_jsonl_data(args.input_file, args.skip, args.limit)
+                )
             else:
                 # Use traditional in-memory loading
                 data = self._load_jsonl_data(args.input_file, args.skip, args.limit)
