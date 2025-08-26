@@ -1,0 +1,53 @@
+[project]
+name = "oldp_toolkit"
+version = "0.1.0"
+description = "OLDP Toolkit - Command-line tools for Open Legal Data Platform"
+authors = [
+    {name = "OLDP Team"}
+]
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.12"
+dependencies = [
+    "datasets>=4.0.0",
+    "huggingface-hub>=0.20.0",
+    "markdownify>=0.11.0",
+    "legal-reference-extraction @ git+https://github.com/openlegaldata/legal-reference-extraction.git",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "ruff>=0.1.0",
+    "pre-commit>=3.0.0",
+]
+
+[project.scripts]
+oldpt = "oldp_toolkit.cli:main"
+
+[tool.uv]
+package = true
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "SIM"]
+ignore = []
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+docstring-code-format = true
+line-ending = "auto"
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
