@@ -51,6 +51,11 @@ class ConvertDumpToHFCommand(BaseCommand):
             action="store_true",
             help="Enable streaming mode for JSONL loading (loads data line by line instead of all at once)",
         )
+        parser.add_argument(
+            "--extract-references",
+            action="store_true",
+            help="Enable reference extraction from content (adds reference_markers field)",
+        )
 
     def _load_jsonl_data(self, file_path: str, skip: int = 0, limit: int = None):
         """Load data from JSONL file (possibly gzipped)."""
@@ -134,16 +139,17 @@ class ConvertDumpToHFCommand(BaseCommand):
 
         logger.info(f"Streamed {entries_processed} records (skipped {skip})")
 
-    def process_case(self, example):
+    def process_case(self, example, extract_references=False):
         """Process a single case entry.
         - Converting HTML content to Markdown.
-        - Extract references
+        - Extract references (if enabled)
 
         Args:
             example: A dictionary containing case data with a 'content' field
+            extract_references: Whether to extract references from the content
 
         Returns:
-            The example dictionary with an added 'markdown_content' and 'reference_markers' fields
+            The example dictionary with an added 'markdown_content' field and optionally 'reference_markers' field
         """
         if "content" in example and example["content"]:
             try:
@@ -156,38 +162,40 @@ class ConvertDumpToHFCommand(BaseCommand):
                 )
                 example["markdown_content"] = markdown_text.strip()
 
-                # Extract references
-                _, markers = self.ref_extractor.extract(markdown_text)
+                # Extract references only if enabled
+                if extract_references:
+                    _, markers = self.ref_extractor.extract(markdown_text)
 
-                def _ref_to_dict(ref) -> dict:
-                    """Convert a reference object to a JSON-serializable dictionary."""
-                    return {
-                        "ref_type": str(ref.ref_type if hasattr(ref, "ref_type") else "unknown"),
-                        **{k: v for k, v in ref.__dict__.items() if k != "ref_type"},
-                    }
-
-                def _marker_to_dict(marker: RefMarker) -> dict:
-                    """Convert a marker object to a JSON-serializable dictionary."""
-                    marker_dict = {
-                        **{
-                            col: getattr(marker, col)
-                            for col in ["end", "line", "start", "text"]
-                            if hasattr(marker, col)
+                    def _ref_to_dict(ref) -> dict:
+                        """Convert a reference object to a JSON-serializable dictionary."""
+                        return {
+                            "ref_type": str(ref.ref_type if hasattr(ref, "ref_type") else "unknown"),
+                            **{k: v for k, v in ref.__dict__.items() if k != "ref_type"},
                         }
-                    }
 
-                    # Handle references within the marker
-                    if hasattr(marker, "references") and marker.references:
-                        marker_dict["references"] = [_ref_to_dict(ref) for ref in marker.references]
-                    else:
-                        marker_dict["references"] = []
+                    def _marker_to_dict(marker: RefMarker) -> dict:
+                        """Convert a marker object to a JSON-serializable dictionary."""
+                        marker_dict = {
+                            **{
+                                col: getattr(marker, col)
+                                for col in ["end", "line", "start", "text"]
+                                if hasattr(marker, col)
+                            }
+                        }
 
-                    return marker_dict
+                        # Handle references within the marker
+                        if hasattr(marker, "references") and marker.references:
+                            marker_dict["references"] = [_ref_to_dict(ref) for ref in marker.references]
+                        else:
+                            marker_dict["references"] = []
 
-                # example["content_with_markers"] = content_with_markers
-                reference_markers = [_marker_to_dict(marker) for marker in markers]
-                reference_markers = json.dumps(reference_markers)  # stringify for PyArrow
-                example["reference_markers"] = reference_markers
+                        return marker_dict
+
+                    reference_markers = [_marker_to_dict(marker) for marker in markers]
+                    reference_markers = json.dumps(reference_markers)  # stringify for PyArrow
+                    example["reference_markers"] = reference_markers
+                else:
+                    example["reference_markers"] = "[]"
 
             except Exception as e:
                 logger.error(f"Failed to process case: {e}")
@@ -307,7 +315,12 @@ class ConvertDumpToHFCommand(BaseCommand):
                 else:
                     logger.info("Processing cases (single process)")
 
-                dataset = dataset.map(self.process_case, batched=False, desc="Processing cases", num_proc=args.num_proc)
+                dataset = dataset.map(
+                    lambda example: self.process_case(example, extract_references=args.extract_references),
+                    batched=False,
+                    desc="Processing cases",
+                    num_proc=args.num_proc,
+                )
                 logger.info("Processing completed")
 
             # Save dataset in the specified format
