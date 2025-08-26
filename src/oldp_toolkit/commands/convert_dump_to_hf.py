@@ -40,6 +40,17 @@ class ConvertDumpToHFCommand(BaseCommand):
         parser.add_argument("--config-name", help="Configuration name for HF formats (required for hf_hub and hf_disk)")
         parser.add_argument("--split", default="train", help="Dataset split name for HF formats (default: train)")
         parser.add_argument("--no-process", action="store_true", help="Skip HTML to Markdown processing")
+        parser.add_argument(
+            "--num-proc",
+            type=int,
+            default=None,
+            help="Number of processes to use for parallel processing (default: None, no parallelization)",
+        )
+        parser.add_argument(
+            "--streaming",
+            action="store_true",
+            help="Enable streaming mode for JSONL loading (loads data line by line instead of all at once)",
+        )
 
     def _load_jsonl_data(self, file_path: str, skip: int = 0, limit: int = None):
         """Load data from JSONL file (possibly gzipped)."""
@@ -82,6 +93,46 @@ class ConvertDumpToHFCommand(BaseCommand):
 
         logger.info(f"Loaded {len(data)} records (skipped {skip}, processed {entries_processed})")
         return data
+
+    def _stream_jsonl_data(self, file_path: str, skip: int = 0, limit: int = None):
+        """Stream data from JSONL file (possibly gzipped) using a generator."""
+        path = Path(file_path)
+
+        if not path.exists():
+            raise FileNotFoundError(f"Input file not found: {file_path}")
+
+        logger.info(f"Streaming data from {file_path}")
+        if skip > 0:
+            logger.info(f"Skipping first {skip} entries")
+
+        # Determine if file is gzipped
+        is_gzipped = path.suffix.lower() == ".gz"
+        open_func = gzip.open if is_gzipped else open
+        mode = "rt" if is_gzipped else "r"
+
+        entries_processed = 0
+        with open_func(file_path, mode, encoding="utf-8") as f:
+            for i, line in enumerate(f):
+                line = line.strip()
+                if not line:
+                    continue
+
+                # Skip entries if needed
+                if i < skip:
+                    continue
+
+                # Apply limit after skipping
+                if limit and entries_processed >= limit:
+                    break
+
+                try:
+                    yield json.loads(line)
+                    entries_processed += 1
+                except json.JSONDecodeError as e:
+                    logger.warning(f"Failed to parse line {i + 1}: {e}")
+                    continue
+
+        logger.info(f"Streamed {entries_processed} records (skipped {skip})")
 
     def process_case(self, example):
         """Process a single case entry.
@@ -228,22 +279,34 @@ class ConvertDumpToHFCommand(BaseCommand):
                 logger.info(f"Skipping first {args.skip} entries")
             if args.limit:
                 logger.info(f"Limiting to first {args.limit} entries after skip")
+            if args.streaming:
+                logger.info("Using streaming mode for JSONL loading")
 
-            # Load data from JSONL file
-            data = self._load_jsonl_data(args.input_file, args.skip, args.limit)
+            # Load or stream data from JSONL file
+            if args.streaming:
+                # Use streaming approach - create dataset from generator
+                data_generator = self._stream_jsonl_data(args.input_file, args.skip, args.limit)
+                logger.info("Creating HuggingFace dataset from stream")
+                dataset = Dataset.from_generator(lambda: data_generator)
+            else:
+                # Use traditional in-memory loading
+                data = self._load_jsonl_data(args.input_file, args.skip, args.limit)
 
-            if not data:
-                logger.error("No valid data found in input file")
-                return
+                if not data:
+                    logger.error("No valid data found in input file")
+                    return
 
-            # Create HuggingFace dataset
-            logger.info("Creating HuggingFace dataset")
-            dataset = Dataset.from_list(data)
+                logger.info("Creating HuggingFace dataset from list")
+                dataset = Dataset.from_list(data)
 
             # Process cases unless disabled
             if not args.no_process:
-                logger.info("Processing cases")
-                dataset = dataset.map(self.process_case, batched=False, desc="Processing cases")
+                if args.num_proc:
+                    logger.info(f"Processing cases with {args.num_proc} processes")
+                else:
+                    logger.info("Processing cases (single process)")
+
+                dataset = dataset.map(self.process_case, batched=False, desc="Processing cases", num_proc=args.num_proc)
                 logger.info("Processing completed")
 
             # Save dataset in the specified format

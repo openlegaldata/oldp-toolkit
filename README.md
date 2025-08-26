@@ -70,6 +70,9 @@ oldpt convert_dump_to_hf input.jsonl output.parquet --format parquet --skip 500 
 
 # Save to disk in HF format with custom split
 oldpt convert_dump_to_hf input.jsonl ./dataset --format hf_disk --config-name legal_cases --split validation
+
+# Use parallel processing with 4 processes for faster processing
+oldpt convert_dump_to_hf input.jsonl output.jsonl --format jsonl --num-proc 4
 ```
 
 ### Available Commands
@@ -108,6 +111,7 @@ The `convert_dump_to_hf` command supports multiple output formats:
 - Configurable batch processing
 - Skip entries with `--skip N` (skip first N entries)
 - Limit dataset size with `--limit N` (applied after skip)
+- Parallel processing with `--num-proc N` (default: single process)
 
 ## Development
 

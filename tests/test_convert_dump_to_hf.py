@@ -37,6 +37,7 @@ def test_add_arguments():
     assert ("--config-name",) in call_args
     assert ("--split",) in call_args
     assert ("--no-process",) in call_args
+    assert ("--num-proc",) in call_args
 
 
 def test_load_jsonl_data():
@@ -206,6 +207,7 @@ def test_handle_success(mock_dataset_class):
     args.split = "train"
     args.no_process = True  # Skip processing for this test
     args.batch_size = 1000
+    args.num_proc = None
 
     try:
         # Execute handle
@@ -237,6 +239,7 @@ def test_handle_no_data(mock_dataset_class):
     args.skip = 0
     args.limit = None
     args.no_process = True
+    args.num_proc = None
 
     try:
         # Execute handle
@@ -281,6 +284,7 @@ def test_handle_with_processing(mock_dataset_class):
     args.split = "train"
     args.no_process = False  # Enable processing
     args.batch_size = 1000
+    args.num_proc = None
 
     try:
         # Execute handle
@@ -295,6 +299,7 @@ def test_handle_with_processing(mock_dataset_class):
         assert call_args[0][0] == command.process_case
         assert not call_args[1]["batched"]
         assert "desc" in call_args[1]
+        assert call_args[1]["num_proc"] is None
 
         # Verify upload used processed dataset
         mock_processed_dataset.push_to_hub.assert_called_once_with(
@@ -543,3 +548,61 @@ def test_full_processing_with_fixture_data():
         with patch.object(processed_dataset, "to_json") as mock_to_json:
             command._save_dataset(processed_dataset, mock_args)
             mock_to_json.assert_called_once_with(mock_args.output)
+
+
+@patch("oldp_toolkit.commands.convert_dump_to_hf.Dataset")
+def test_handle_with_parallel_processing(mock_dataset_class):
+    """Test handle with parallel processing enabled."""
+    command = ConvertDumpToHFCommand()
+
+    # Create test data with HTML content
+    test_data = [{"id": 1, "content": "<h1>Title</h1><p>Content</p>"}]
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as f:
+        f.write(json.dumps(test_data[0]) + "\n")
+        temp_path = f.name
+
+    # Mock dataset and its map method
+    mock_dataset = Mock()
+    mock_dataset.__len__ = Mock(return_value=1)  # Add len() method
+    mock_processed_dataset = Mock()
+    mock_processed_dataset.__len__ = Mock(return_value=1)  # Add len() method
+    mock_dataset.map.return_value = mock_processed_dataset
+    mock_dataset_class.from_list.return_value = mock_dataset
+
+    # Mock args with parallel processing enabled
+    args = Mock()
+    args.input_file = temp_path
+    args.output = "test/dataset"
+    args.format = "hf_hub"
+    args.skip = 0
+    args.limit = None
+    args.private = False
+    args.config_name = "default"
+    args.split = "train"
+    args.no_process = False  # Enable processing
+    args.batch_size = 1000
+    args.num_proc = 4  # Enable parallel processing
+
+    try:
+        # Execute handle
+        command.handle(args)
+
+        # Verify dataset creation
+        mock_dataset_class.from_list.assert_called_once_with(test_data)
+
+        # Verify processing was applied with parallel processing
+        mock_dataset.map.assert_called_once()
+        call_args = mock_dataset.map.call_args
+        assert call_args[0][0] == command.process_case
+        assert not call_args[1]["batched"]
+        assert "desc" in call_args[1]
+        assert call_args[1]["num_proc"] == 4
+
+        # Verify upload used processed dataset
+        mock_processed_dataset.push_to_hub.assert_called_once_with(
+            "test/dataset", config_name="default", split="train", private=False
+        )
+
+    finally:
+        Path(temp_path).unlink()
