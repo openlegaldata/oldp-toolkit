@@ -8,9 +8,9 @@ from unittest.mock import Mock, patch
 import pytest
 
 from oldp_toolkit.commands.convert_dump_to_hf import (
-    ConvertDumpToHFCommand,
     REFERENCES_DROP_COLUMNS,
     REFERENCES_FEATURES,
+    ConvertDumpToHFCommand,
     _detect_type_from_path,
 )
 

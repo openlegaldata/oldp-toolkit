@@ -28,26 +28,28 @@ SUPPORTED_TYPES = ("cases", "laws", "references")
 # as ``DatasetGenerationError("An error occurred while generating the
 # dataset")`` mid-stream. Pre-declaring the schema makes the type a
 # nullable int / string from the start.
-CASES_FEATURES = Features({
-    "id":           Value("int64"),
-    "slug":         Value("string"),
-    "court": {
-        "id":              Value("int64"),
-        "name":            Value("string"),
-        "slug":            Value("string"),
-        "city":            Value("int64"),
-        "state":           Value("int64"),
-        "jurisdiction":    Value("string"),
-        "level_of_appeal": Value("string"),
-    },
-    "file_number":  Value("string"),
-    "date":         Value("string"),
-    "created_date": Value("string"),
-    "updated_date": Value("string"),
-    "type":         Value("string"),
-    "ecli":         Value("string"),
-    "content":      Value("string"),
-})
+CASES_FEATURES = Features(
+    {
+        "id": Value("int64"),
+        "slug": Value("string"),
+        "court": {
+            "id": Value("int64"),
+            "name": Value("string"),
+            "slug": Value("string"),
+            "city": Value("int64"),
+            "state": Value("int64"),
+            "jurisdiction": Value("string"),
+            "level_of_appeal": Value("string"),
+        },
+        "file_number": Value("string"),
+        "date": Value("string"),
+        "created_date": Value("string"),
+        "updated_date": Value("string"),
+        "type": Value("string"),
+        "ecli": Value("string"),
+        "content": Value("string"),
+    }
+)
 
 
 # Explicit HF features schema for the *raw* laws JSONL (before
@@ -55,22 +57,24 @@ CASES_FEATURES = Features({
 # ``CASES_FEATURES``: nullable string columns (``amtabk``, ``kurzue``,
 # ``doknr``) first appear as ``None`` and would be typed as Arrow
 # ``null`` by inference, then later non-null values would fail to cast.
-LAWS_FEATURES = Features({
-    "id":           Value("int64"),
-    "book":         Value("int64"),
-    "book_code":    Value("string"),
-    "book_slug":    Value("string"),
-    "title":        Value("string"),
-    "content":      Value("string"),
-    "slug":         Value("string"),
-    "created_date": Value("string"),
-    "updated_date": Value("string"),
-    "section":      Value("string"),
-    "amtabk":       Value("string"),
-    "kurzue":       Value("string"),
-    "doknr":        Value("string"),
-    "order":        Value("int64"),
-})
+LAWS_FEATURES = Features(
+    {
+        "id": Value("int64"),
+        "book": Value("int64"),
+        "book_code": Value("string"),
+        "book_slug": Value("string"),
+        "title": Value("string"),
+        "content": Value("string"),
+        "slug": Value("string"),
+        "created_date": Value("string"),
+        "updated_date": Value("string"),
+        "section": Value("string"),
+        "amtabk": Value("string"),
+        "kurzue": Value("string"),
+        "doknr": Value("string"),
+        "order": Value("int64"),
+    }
+)
 
 
 # Numerical id columns dropped from the published references dataset —
@@ -84,31 +88,33 @@ REFERENCES_DROP_COLUMNS = frozenset({"from_id", "to_id", "from_case_court_id"})
 # columns minus REFERENCES_DROP_COLUMNS). ``from_case_date`` carries an
 # ISO ``YYYY-MM-DD`` string when set and an empty cell otherwise; we
 # materialise it as ``date32`` so consumers can filter by date natively.
-REFERENCES_FEATURES = Features({
-    "from_case_court_chamber":         Value("string"),
-    "from_case_court_city":            Value("string"),
-    "from_case_court_jurisdiction":    Value("string"),
-    "from_case_court_level_of_appeal": Value("string"),
-    "from_case_court_name":            Value("string"),
-    "from_case_court_state":           Value("string"),
-    "from_case_date":                  Value("date32"),
-    "from_case_file_number":           Value("string"),
-    "from_case_review_status":         Value("string"),
-    "from_case_source_name":           Value("string"),
-    "from_case_type":                  Value("string"),
-    "from_law_book_slug":              Value("string"),
-    "from_slug":                       Value("string"),
-    "from_type":                       Value("string"),
-    "to_case_court_jurisdiction":      Value("string"),
-    "to_case_court_level_of_appeal":   Value("string"),
-    "to_case_court_name":              Value("string"),
-    "to_law_book_code":                Value("string"),
-    "to_law_book_slug":                Value("string"),
-    "to_law_section":                  Value("string"),
-    "to_law_title":                    Value("string"),
-    "to_slug":                         Value("string"),
-    "to_type":                         Value("string"),
-})
+REFERENCES_FEATURES = Features(
+    {
+        "from_case_court_chamber": Value("string"),
+        "from_case_court_city": Value("string"),
+        "from_case_court_jurisdiction": Value("string"),
+        "from_case_court_level_of_appeal": Value("string"),
+        "from_case_court_name": Value("string"),
+        "from_case_court_state": Value("string"),
+        "from_case_date": Value("date32"),
+        "from_case_file_number": Value("string"),
+        "from_case_review_status": Value("string"),
+        "from_case_source_name": Value("string"),
+        "from_case_type": Value("string"),
+        "from_law_book_slug": Value("string"),
+        "from_slug": Value("string"),
+        "from_type": Value("string"),
+        "to_case_court_jurisdiction": Value("string"),
+        "to_case_court_level_of_appeal": Value("string"),
+        "to_case_court_name": Value("string"),
+        "to_law_book_code": Value("string"),
+        "to_law_book_slug": Value("string"),
+        "to_law_section": Value("string"),
+        "to_law_title": Value("string"),
+        "to_slug": Value("string"),
+        "to_type": Value("string"),
+    }
+)
 
 
 def _jsonl_generator(file_path: str, skip: int = 0, limit: int = None):
@@ -384,7 +390,7 @@ class ConvertDumpToHFCommand(BaseCommand):
         # All remaining (non-dropped, non-date) columns are read as the
         # nullable pandas string dtype so empty cells become <NA>.
         keep_cols = set(REFERENCES_FEATURES) - {"from_case_date"}
-        string_dtypes = {col: "string" for col in keep_cols}
+        string_dtypes = dict.fromkeys(keep_cols, "string")
 
         chunks = []
         rows_seen = 0  # data rows seen across chunks (header not counted by read_csv)
@@ -580,9 +586,7 @@ class ConvertDumpToHFCommand(BaseCommand):
             # first-batch values are nullable (Arrow otherwise infers
             # ``null`` and later non-null values fail to cast).
             features = (
-                CASES_FEATURES if resource_type == "cases"
-                else LAWS_FEATURES if resource_type == "laws"
-                else None
+                CASES_FEATURES if resource_type == "cases" else LAWS_FEATURES if resource_type == "laws" else None
             )
             dataset = Dataset.from_generator(
                 _jsonl_generator,
@@ -617,8 +621,7 @@ class ConvertDumpToHFCommand(BaseCommand):
         """Load references CSV with typed schema, return a Dataset."""
         if args.streaming:
             logger.warning(
-                "--streaming is ignored for --type references "
-                "(CSV is loaded in chunks but materialised in memory)."
+                "--streaming is ignored for --type references (CSV is loaded in chunks but materialised in memory)."
             )
         if args.no_process:
             logger.warning("--no-process is ignored for --type references (no processing step exists).")
