@@ -7,7 +7,33 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from oldp_toolkit.commands.convert_dump_to_hf import ConvertDumpToHFCommand
+from oldp_toolkit.commands.convert_dump_to_hf import (
+    ConvertDumpToHFCommand,
+    REFERENCES_DROP_COLUMNS,
+    REFERENCES_FEATURES,
+    _detect_type_from_path,
+)
+
+
+@pytest.mark.parametrize(
+    "path,expected",
+    [
+        ("cases.jsonl.gz", "cases"),
+        ("cases.10.jsonl.gz", "cases"),
+        ("laws.jsonl.gz", "laws"),
+        ("references.csv", "references"),
+        ("references.csv.gz", "references"),
+        ("references.100.csv", "references"),
+        ("/abs/path/cases.jsonl.gz", "cases"),
+        ("/abs/path/laws.10.jsonl.gz", "laws"),
+        ("/abs/path/references.csv", "references"),
+        ("mydump.jsonl", None),
+        ("output", None),
+        ("foo.cases.jsonl.gz", None),  # token must be first
+    ],
+)
+def test_detect_type_from_path(path, expected):
+    assert _detect_type_from_path(path) == expected
 
 
 def test_convert_dump_command_instantiation():
@@ -29,6 +55,7 @@ def test_add_arguments():
 
     assert ("input_file",) in call_args
     assert ("output",) in call_args
+    assert ("--type",) in call_args
     assert ("--format",) in call_args
     assert ("--skip",) in call_args
     assert ("--limit",) in call_args
@@ -119,6 +146,44 @@ def test_load_jsonl_data_file_not_found():
         command._load_jsonl_data("non_existent_file.jsonl")
 
 
+def test_process_law_with_html():
+    """process_law converts HTML to Markdown but does NOT extract references."""
+    command = ConvertDumpToHFCommand()
+
+    example = {"id": 1, "content": "<h1>§ 1 BGB</h1><p>Some <strong>legal</strong> text.</p>"}
+
+    result = command.process_law(example)
+
+    assert "markdown_content" in result
+    assert "# § 1 BGB" in result["markdown_content"]
+    assert "**legal**" in result["markdown_content"]
+    # Critical: no reference_markers field on laws
+    assert "reference_markers" not in result
+    assert result["id"] == 1  # original fields preserved
+    assert "content" in result  # original content preserved
+
+
+def test_process_law_without_content():
+    """process_law on a record without content field still produces empty markdown_content."""
+    command = ConvertDumpToHFCommand()
+
+    result = command.process_law({"id": 1, "title": "Untitled"})
+
+    assert result["markdown_content"] == ""
+    assert "reference_markers" not in result
+    assert result["id"] == 1
+
+
+def test_process_law_with_empty_content():
+    """process_law on a record with empty content still produces empty markdown_content."""
+    command = ConvertDumpToHFCommand()
+
+    result = command.process_law({"id": 1, "content": ""})
+
+    assert result["markdown_content"] == ""
+    assert "reference_markers" not in result
+
+
 def test_process_case_with_html():
     """Test process_case function with HTML content."""
     command = ConvertDumpToHFCommand()
@@ -199,6 +264,7 @@ def test_handle_success(mock_dataset_class):
     args = Mock()
     args.input_file = temp_path
     args.output = "test/dataset"
+    args.type = "cases"
     args.format = "hf_hub"
     args.skip = 0
     args.limit = None
@@ -208,6 +274,7 @@ def test_handle_success(mock_dataset_class):
     args.no_process = True  # Skip processing for this test
     args.batch_size = 1000
     args.num_proc = None
+    args.streaming = False
 
     try:
         # Execute handle
@@ -235,11 +302,13 @@ def test_handle_no_data(mock_dataset_class):
     args = Mock()
     args.input_file = temp_path
     args.output = "test/dataset"
+    args.type = "cases"
     args.format = "hf_hub"
     args.skip = 0
     args.limit = None
     args.no_process = True
     args.num_proc = None
+    args.streaming = False
 
     try:
         # Execute handle
@@ -276,6 +345,7 @@ def test_handle_with_processing(mock_dataset_class):
     args = Mock()
     args.input_file = temp_path
     args.output = "test/dataset"
+    args.type = "cases"
     args.format = "hf_hub"
     args.skip = 0
     args.limit = None
@@ -285,6 +355,7 @@ def test_handle_with_processing(mock_dataset_class):
     args.no_process = False  # Enable processing
     args.batch_size = 1000
     args.num_proc = None
+    args.streaming = False
 
     try:
         # Execute handle
@@ -574,6 +645,7 @@ def test_handle_with_parallel_processing(mock_dataset_class):
     args = Mock()
     args.input_file = temp_path
     args.output = "test/dataset"
+    args.type = "cases"
     args.format = "hf_hub"
     args.skip = 0
     args.limit = None
@@ -583,6 +655,7 @@ def test_handle_with_parallel_processing(mock_dataset_class):
     args.no_process = False  # Enable processing
     args.batch_size = 1000
     args.num_proc = 4  # Enable parallel processing
+    args.streaming = False
 
     try:
         # Execute handle
@@ -606,3 +679,166 @@ def test_handle_with_parallel_processing(mock_dataset_class):
 
     finally:
         Path(temp_path).unlink()
+
+
+def test_full_processing_laws_fixture():
+    """Integration test using the laws.10.jsonl.gz fixture.
+
+    Validates process_law on real data: every entry gets a non-empty
+    markdown_content without HTML tags, and the reference_markers field
+    is NEVER added (laws path skips ref extraction by design).
+    """
+    from datasets import Dataset
+
+    command = ConvertDumpToHFCommand()
+
+    fixture_path = Path(__file__).parent / "fixtures" / "dumps" / "laws.10.jsonl.gz"
+    assert fixture_path.exists(), f"Fixture not found at {fixture_path}"
+
+    data = command._load_jsonl_data(str(fixture_path))
+    assert len(data) == 10
+    for i, entry in enumerate(data):
+        assert "id" in entry, f"Entry {i} missing id"
+        assert "content" in entry, f"Entry {i} missing content"
+
+    dataset = Dataset.from_list(data)
+    processed = dataset.map(command.process_law, batched=False).to_list()
+
+    for i, entry in enumerate(processed):
+        assert "markdown_content" in entry, f"Entry {i} missing markdown_content"
+        assert "reference_markers" not in entry, f"Entry {i} should NOT have reference_markers"
+        if entry["content"]:
+            assert entry["markdown_content"], f"Entry {i} has empty markdown_content"
+            assert "<p>" not in entry["markdown_content"].lower(), f"Entry {i} still has <p>"
+            assert "<h1" not in entry["markdown_content"].lower(), f"Entry {i} still has <h1>"
+
+
+@patch("oldp_toolkit.commands.convert_dump_to_hf.Dataset")
+def test_handle_dispatch_laws(mock_dataset_class):
+    """handle() dispatches to process_law for --type laws."""
+    command = ConvertDumpToHFCommand()
+
+    test_data = [{"id": 1, "content": "<p>Law text</p>"}]
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as f:
+        f.write(json.dumps(test_data[0]) + "\n")
+        temp_path = f.name
+
+    mock_dataset = Mock()
+    mock_dataset.__len__ = Mock(return_value=1)
+    mock_processed = Mock()
+    mock_processed.__len__ = Mock(return_value=1)
+    mock_dataset.map.return_value = mock_processed
+    mock_dataset_class.from_list.return_value = mock_dataset
+
+    args = Mock()
+    args.input_file = temp_path
+    args.output = "test/laws"
+    args.type = "laws"
+    args.format = "hf_hub"
+    args.skip = 0
+    args.limit = None
+    args.private = False
+    args.config_name = "default"
+    args.split = "train"
+    args.no_process = False
+    args.batch_size = 1000
+    args.num_proc = None
+    args.streaming = False
+
+    try:
+        command.handle(args)
+        mock_dataset.map.assert_called_once()
+        assert mock_dataset.map.call_args[0][0] == command.process_law
+    finally:
+        Path(temp_path).unlink()
+
+
+# ---------------------------------------------------------------------------
+# References (CSV) path
+# ---------------------------------------------------------------------------
+
+
+def _references_fixture_path():
+    return Path(__file__).parent / "fixtures" / "dumps" / "references.100.csv"
+
+
+def test_load_csv_data_basic():
+    """Load the fixture, expect 100 data rows and 23 columns (ids dropped)."""
+    command = ConvertDumpToHFCommand()
+    ds = command._load_csv_data(str(_references_fixture_path()))
+    assert ds is not None
+    assert len(ds) == 100
+    assert len(ds.features) == 23
+
+
+def test_load_csv_data_drops_numerical_ids():
+    """from_id / to_id / from_case_court_id must NOT be in the loaded Dataset."""
+    command = ConvertDumpToHFCommand()
+    ds = command._load_csv_data(str(_references_fixture_path()))
+    feats = set(ds.features)
+    for col in REFERENCES_DROP_COLUMNS:
+        assert col not in feats, f"{col} should be dropped"
+
+
+def test_load_csv_data_typed_features():
+    """from_case_date is date32; all other columns are strings."""
+    command = ConvertDumpToHFCommand()
+    ds = command._load_csv_data(str(_references_fixture_path()))
+    # Features must match REFERENCES_FEATURES exactly
+    assert ds.features == REFERENCES_FEATURES
+    # spot-check the types
+    assert str(ds.features["from_case_date"]).startswith("Value")
+    assert ds.features["from_case_date"].dtype == "date32"
+    assert ds.features["from_slug"].dtype == "string"
+    assert ds.features["to_slug"].dtype == "string"
+
+
+def test_load_csv_data_skip_limit():
+    """skip and limit honour the JSONL-loader semantics (rows-after-skip)."""
+    command = ConvertDumpToHFCommand()
+    path = str(_references_fixture_path())
+
+    all_rows = command._load_csv_data(path)
+    skip5 = command._load_csv_data(path, skip=5)
+    limit10 = command._load_csv_data(path, limit=10)
+    skip5_limit3 = command._load_csv_data(path, skip=5, limit=3)
+    skip_all = command._load_csv_data(path, skip=1000)
+
+    assert len(all_rows) == 100
+    assert len(skip5) == 95
+    assert len(limit10) == 10
+    assert len(skip5_limit3) == 3
+    # Skip past the end -> no rows -> None per _load_csv_data contract
+    assert skip_all is None
+
+
+def test_load_csv_data_file_not_found():
+    command = ConvertDumpToHFCommand()
+    with pytest.raises(FileNotFoundError):
+        command._load_csv_data("/no/such/references.csv")
+
+
+@patch.object(ConvertDumpToHFCommand, "_load_csv_data")
+@patch.object(ConvertDumpToHFCommand, "_save_dataset")
+def test_handle_dispatch_references(mock_save, mock_loader):
+    """handle() routes --type references to _load_csv_data, not the JSONL path."""
+    command = ConvertDumpToHFCommand()
+
+    mock_loader.return_value = Mock(__len__=Mock(return_value=10))
+
+    args = Mock()
+    args.input_file = "/tmp/whatever.csv"
+    args.output = "test/refs"
+    args.type = "references"
+    args.format = "hf_disk"
+    args.skip = 0
+    args.limit = None
+    args.config_name = "default"
+    args.split = "train"
+    args.no_process = False
+    args.streaming = False
+    args.num_proc = None
+
+    command.handle(args)
+    mock_loader.assert_called_once_with(args.input_file, args.skip, args.limit)
+    mock_save.assert_called_once()
